@@ -146,11 +146,18 @@ def analyze_uploaded_dataframe(
     category_column: str | None = None,
     numeric_column: str | None = None,
     threshold: float | None = None,
+    filter_column: str | None = None,
+    comparison: str | None = None,
+    filter_value: float | str | None = None,
+    aggregation: str | None = None,
     top_n: int = 3,
     allow_cleaning: bool = False,
 ) -> ToolResult:
     """Perform allowlisted analytics on an already-loaded CSV dataframe."""
-    allowed_operations = {"profile", "missing_values", "average", "top_n", "summary", "group_count_below"}
+    allowed_operations = {
+        "profile", "missing_values", "average", "top_n", "summary",
+        "group_count", "group_count_below", "filtered_group_count", "group_aggregate",
+    }
     if operation not in allowed_operations:
         return ToolResult(False, "Analysis operation is not allowed.", error_code="OPERATION_NOT_ALLOWED")
     if frame.empty:
@@ -191,6 +198,50 @@ def analyze_uploaded_dataframe(
             "operation": operation, "category_column": category_column, "numeric_column": numeric_column,
             "threshold": float(threshold), "counts": {str(key): int(value) for key, value in counts.items()},
             "invalid_values_handled": invalid_count,
+        })
+
+    if operation == "group_count":
+        if category_column not in frame.columns:
+            return ToolResult(False, "Requested grouping column is not available in this dataset.", error_code="COLUMN_NOT_FOUND")
+        counts = frame[category_column].fillna("Unknown").astype(str).value_counts().to_dict()
+        return ToolResult(True, "Group count completed.", {
+            "operation": operation, "category_column": category_column,
+            "counts": {str(key): int(value) for key, value in counts.items()},
+        })
+
+    if operation == "filtered_group_count":
+        # Values are passed through the fixed registry, never evaluated as code.
+        if category_column not in frame.columns or filter_column not in frame.columns:
+            return ToolResult(False, "Requested columns are not available in this dataset.", error_code="COLUMN_NOT_FOUND")
+        if comparison not in {"<", "<=", ">", ">=", "==", "!="}:
+            return ToolResult(False, "Comparison is not allowed.", error_code="COMPARISON_NOT_ALLOWED")
+        values = pd.to_numeric(frame[filter_column], errors="coerce")
+        if comparison in {"<", "<=", ">", ">="}:
+            if not isinstance(filter_value, (int, float)):
+                return ToolResult(False, "Numeric comparisons require a numeric value.", error_code="INVALID_FILTER_VALUE")
+            masks = {"<": values < filter_value, "<=": values <= filter_value, ">": values > filter_value, ">=": values >= filter_value}
+            mask = masks[comparison]
+        else:
+            text_values = frame[filter_column].fillna("").astype(str).str.lower()
+            target = str(filter_value).lower()
+            mask = text_values == target if comparison == "==" else text_values != target
+        counts = frame.loc[mask, category_column].fillna("Unknown").astype(str).value_counts().to_dict()
+        return ToolResult(True, "Filtered group count completed.", {
+            "operation": operation, "category_column": category_column, "filter_column": filter_column,
+            "comparison": comparison, "filter_value": filter_value,
+            "counts": {str(key): int(value) for key, value in counts.items()},
+        })
+
+    if operation == "group_aggregate":
+        if category_column not in frame.columns or numeric_column not in frame.columns:
+            return ToolResult(False, "Requested columns are not available in this dataset.", error_code="COLUMN_NOT_FOUND")
+        if aggregation not in {"mean", "sum", "min", "max"}:
+            return ToolResult(False, "Aggregation is not allowed.", error_code="AGGREGATION_NOT_ALLOWED")
+        values = pd.to_numeric(frame[numeric_column], errors="coerce")
+        grouped = frame.assign(_value=values).dropna(subset=["_value"]).groupby(category_column)["_value"].agg(aggregation).round(2)
+        return ToolResult(True, "Grouped aggregation completed.", {
+            "operation": operation, "category_column": category_column, "numeric_column": numeric_column,
+            "aggregation": aggregation, "values": {str(key): float(value) for key, value in grouped.items()},
         })
 
     if column not in frame.columns:

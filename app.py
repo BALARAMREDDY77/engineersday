@@ -143,6 +143,15 @@ def render_uploaded_results(results: list[ToolResult]) -> None:
                 use_container_width=True,
                 hide_index=True,
             )
+        elif operation in {"group_count", "filtered_group_count"}:
+            label = f"Count by {data['category_column']}"
+            if operation == "filtered_group_count":
+                label += f" where {data['filter_column']} {data['comparison']} {data['filter_value']}"
+            st.write(f"**{label}:**")
+            st.dataframe(pd.DataFrame(data["counts"].items(), columns=[data["category_column"], "count"]), use_container_width=True, hide_index=True)
+        elif operation == "group_aggregate":
+            st.write(f"**{data['aggregation']} {data['numeric_column']} by {data['category_column']}:**")
+            st.dataframe(pd.DataFrame(data["values"].items(), columns=[data["category_column"], data["aggregation"]]), use_container_width=True, hide_index=True)
         elif operation == "summary":
             st.dataframe(pd.DataFrame(data["summary"]), use_container_width=True)
 

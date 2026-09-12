@@ -128,7 +128,10 @@ def _validate_dataset_actions(payload: object, columns: list[str]) -> list[dict[
         if not isinstance(action, dict):
             return None
         operation = action.get("operation")
-        if operation not in {"profile", "missing_values", "average", "top_n", "summary", "group_count_below"}:
+        if operation not in {
+            "profile", "missing_values", "average", "top_n", "summary", "group_count",
+            "group_count_below", "filtered_group_count", "group_aggregate",
+        }:
             return None
         item: dict[str, str] = {"operation": operation}
         if operation in {"average", "top_n"}:
@@ -141,6 +144,24 @@ def _validate_dataset_actions(payload: object, columns: list[str]) -> list[dict[
             if category_column not in columns or numeric_column not in columns or not isinstance(threshold, (int, float)):
                 return None
             item.update({"category_column": category_column, "numeric_column": numeric_column, "threshold": float(threshold)})
+        if operation == "group_count":
+            category_column = action.get("category_column")
+            if category_column not in columns:
+                return None
+            item["category_column"] = category_column
+        if operation == "filtered_group_count":
+            category_column, filter_column = action.get("category_column"), action.get("filter_column")
+            comparison, filter_value = action.get("comparison"), action.get("filter_value")
+            if category_column not in columns or filter_column not in columns:
+                return None
+            if comparison not in {"<", "<=", ">", ">=", "==", "!="} or not isinstance(filter_value, (int, float, str)):
+                return None
+            item.update({"category_column": category_column, "filter_column": filter_column, "comparison": comparison, "filter_value": filter_value})
+        if operation == "group_aggregate":
+            category_column, numeric_column, aggregation = action.get("category_column"), action.get("numeric_column"), action.get("aggregation")
+            if category_column not in columns or numeric_column not in columns or aggregation not in {"mean", "sum", "min", "max"}:
+                return None
+            item.update({"category_column": category_column, "numeric_column": numeric_column, "aggregation": aggregation})
         actions.append(item)
     return actions or None
 
@@ -150,16 +171,6 @@ def _fallback_dataset_actions(task: str, columns: list[str]) -> list[dict[str, A
     numeric_candidates = [name for name in columns if any(key in name.lower() for key in ("score", "mark", "amount", "sales", "value", "price"))]
     numeric_column = numeric_candidates[0] if numeric_candidates else None
     actions: list[dict[str, Any]] = [{"operation": "profile"}]
-    threshold_match = re.search(r"(?:less than|below|under|lower than)\s*(\d+(?:\.\d+)?)", normalized)
-    category_column = next((name for name in columns if any(key in name.lower() for key in ("gender", "sex"))), None)
-    requested_numeric = next(
-        (name for name in columns if all(word in normalized for word in name.lower().replace(".", " ").split())), None
-    )
-    if threshold_match and category_column and requested_numeric:
-        return actions + [{
-            "operation": "group_count_below", "category_column": category_column,
-            "numeric_column": requested_numeric, "threshold": float(threshold_match.group(1)),
-        }]
     if any(word in normalized for word in ("missing", "invalid", "empty", "quality")):
         actions.append({"operation": "missing_values"})
     if numeric_column and any(word in normalized for word in ("top", "highest", "best", "rank")):
@@ -179,15 +190,13 @@ class DatasetPlanner:
         self.chat_client = chat_client
 
     def create_plan(self, task: str, columns: list[str]) -> DatasetPlan:
-        fast_actions = _fallback_dataset_actions(task, columns)
-        if any(action["operation"] == "group_count_below" for action in fast_actions):
-            return DatasetPlan(fast_actions, "validated local rule", "Planning a grouped threshold analysis from the observed dataset schema.")
         prompt = (
             "Create a safe plan for a local CSV. Available columns are: " + ", ".join(columns) + ". "
-            "Allowed operations only: profile, missing_values, summary, average, top_n, group_count_below. "
-            "group_count_below requires category_column, numeric_column, and numeric threshold. "
+            "Allowed operations only: profile, missing_values, summary, average, top_n, group_count, filtered_group_count, group_aggregate. "
+            "Use group_count for category counts. Use filtered_group_count for counts by category after a filter; it needs category_column, filter_column, comparison (< <= > >= == !=), and filter_value. "
+            "Use group_aggregate for mean/sum/min/max by category; it needs category_column, numeric_column, aggregation. "
             "average and top_n require a column exactly from the available list. Use at most three actions. "
-            "Return JSON only: {\"actions\":[{\"operation\":\"profile\"},{\"operation\":\"average\",\"column\":\"score\"}]}. "
+            "Return JSON only. Include profile first, then operations that directly answer the user question. "
             f"User task: {task}"
         )
         try:
@@ -197,9 +206,10 @@ class DatasetPlanner:
                 options={"temperature": 0, "num_predict": 80},
                 think=False,
             )
-            for match in re.finditer(r"\{[\s\S]*?\}\s*\}", response.message.content):
+            for match in re.finditer(r"\{", response.message.content):
                 try:
-                    actions = _validate_dataset_actions(json.loads(match.group()), columns)
+                    payload, _ = json.JSONDecoder().raw_decode(response.message.content[match.start():])
+                    actions = _validate_dataset_actions(payload, columns)
                 except json.JSONDecodeError:
                     continue
                 if actions:
@@ -207,7 +217,7 @@ class DatasetPlanner:
         except Exception:
             pass
         return DatasetPlan(
-            _fallback_dataset_actions(task, columns),
-            "safe local fallback",
-            "Creating a safe plan from the observed dataset schema.",
+            [{"operation": "profile"}],
+            "guardrail fallback",
+            "The model did not produce a valid safe plan; only profiling was allowed.",
         )

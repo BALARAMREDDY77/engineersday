@@ -94,15 +94,19 @@ class SafeToolsTest(unittest.TestCase):
         plan = DatasetPlanner(chat_client=lambda **_: FakeResponse()).create_plan("Find top students", ["student", "score"])
         self.assertEqual(plan.actions[1], {"operation": "top_n", "column": "score"})
 
-    def test_group_count_below_answers_gender_threshold_question(self):
+    def test_model_plan_answers_gender_threshold_question(self):
         frame = pd.DataFrame({
             "gender": ["female", "male", "female", "male"],
             "english.grade": [3.0, 3.2, 3.8, 2.9],
         })
-        plan = DatasetPlanner(chat_client=lambda **_: None).create_plan(
+        class FakeResponse:
+            class message:
+                content = '{"actions":[{"operation":"profile"},{"operation":"filtered_group_count","category_column":"gender","filter_column":"english.grade","comparison":"<","filter_value":3.4}]}'
+
+        plan = DatasetPlanner(chat_client=lambda **_: FakeResponse()).create_plan(
             "How many females and males have english grade less than 3.4?", list(frame.columns)
         )
-        self.assertEqual(plan.actions[1]["operation"], "group_count_below")
+        self.assertEqual(plan.actions[1]["operation"], "filtered_group_count")
         run = DemoAgent().run_uploaded_data_plan(frame, plan.actions, plan.message)
         self.assertTrue(run.result.success)
         self.assertEqual(run.result.data["counts"], {"male": 2, "female": 1})
