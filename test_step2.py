@@ -1,7 +1,9 @@
 import unittest
 
+import pandas as pd
+
 from agent.core import DemoAgent
-from agent.planner import LocalPlanner, parse_plan
+from agent.planner import DatasetPlanner, LocalPlanner, parse_plan
 from agent.tools import SafeToolRegistry
 
 
@@ -66,6 +68,31 @@ class SafeToolsTest(unittest.TestCase):
         )
         self.assertTrue(result.success)
         self.assertGreaterEqual(len(result.data["matches"]), 2)
+
+    def test_uploaded_data_average_recovers_from_invalid_value(self):
+        frame = pd.DataFrame({"student": ["Aarav", "Diya", "Ishaan"], "score": [80, "invalid", 100]})
+        run = DemoAgent().run_uploaded_data_plan(
+            frame,
+            [{"operation": "profile"}, {"operation": "average", "column": "score"}],
+            "Planning a safe uploaded-data analysis.",
+        )
+        self.assertTrue(run.result.success)
+        self.assertEqual(run.result.data["average"], 90.0)
+        self.assertIn("replanning", [event.status for event in run.events])
+
+    def test_uploaded_data_plan_rejects_unknown_operation(self):
+        frame = pd.DataFrame({"score": [80, 90]})
+        run = DemoAgent().run_uploaded_data_plan(frame, [{"operation": "shell"}], "Test plan")
+        self.assertFalse(run.result.success)
+        self.assertEqual(run.result.error_code, "OPERATION_NOT_ALLOWED")
+
+    def test_dataset_planner_validates_model_plan_against_schema(self):
+        class FakeResponse:
+            class message:
+                content = '{"actions":[{"operation":"profile"},{"operation":"top_n","column":"score"}]}'
+
+        plan = DatasetPlanner(chat_client=lambda **_: FakeResponse()).create_plan("Find top students", ["student", "score"])
+        self.assertEqual(plan.actions[1], {"operation": "top_n", "column": "score"})
 
 
 if __name__ == "__main__":

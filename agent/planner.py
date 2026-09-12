@@ -45,6 +45,13 @@ class TaskPlan:
     message: str
 
 
+@dataclass(frozen=True)
+class DatasetPlan:
+    actions: list[dict[str, str]]
+    source: str
+    message: str
+
+
 def fallback_plan(task: str) -> tuple[str, str]:
     """Reliable keyword fallback if Ollama is offline or returns invalid output."""
     normalized = task.lower()
@@ -110,3 +117,76 @@ class LocalPlanner:
 
         workflow, goal = fallback_plan(task)
         return TaskPlan(workflow, goal, WORKFLOW_TO_TOOL[workflow], "safe local fallback", WORKFLOW_MESSAGES[workflow])
+
+
+def _validate_dataset_actions(payload: object, columns: list[str]) -> list[dict[str, str]] | None:
+    if not isinstance(payload, dict) or not isinstance(payload.get("actions"), list):
+        return None
+    actions: list[dict[str, str]] = []
+    for action in payload["actions"][:3]:
+        if not isinstance(action, dict):
+            return None
+        operation = action.get("operation")
+        if operation not in {"profile", "missing_values", "average", "top_n", "summary"}:
+            return None
+        item: dict[str, str] = {"operation": operation}
+        if operation in {"average", "top_n"}:
+            column = action.get("column")
+            if column not in columns:
+                return None
+            item["column"] = column
+        actions.append(item)
+    return actions or None
+
+
+def _fallback_dataset_actions(task: str, columns: list[str]) -> list[dict[str, str]]:
+    normalized = task.lower()
+    numeric_candidates = [name for name in columns if any(key in name.lower() for key in ("score", "mark", "amount", "sales", "value", "price"))]
+    numeric_column = numeric_candidates[0] if numeric_candidates else None
+    actions: list[dict[str, str]] = [{"operation": "profile"}]
+    if any(word in normalized for word in ("missing", "invalid", "empty", "quality")):
+        actions.append({"operation": "missing_values"})
+    if numeric_column and any(word in normalized for word in ("top", "highest", "best", "rank")):
+        actions.append({"operation": "top_n", "column": numeric_column})
+    elif numeric_column and any(word in normalized for word in ("average", "mean", "overall", "calculate")):
+        actions.append({"operation": "average", "column": numeric_column})
+    elif len(actions) == 1:
+        actions.append({"operation": "summary"})
+    return actions
+
+
+class DatasetPlanner:
+    """Uses Qwen to choose a tiny allowlisted plan for an observed CSV schema."""
+
+    def __init__(self, model: str = "qwen3:1.7b", chat_client: Callable = chat) -> None:
+        self.model = model
+        self.chat_client = chat_client
+
+    def create_plan(self, task: str, columns: list[str]) -> DatasetPlan:
+        prompt = (
+            "Create a safe plan for a local CSV. Available columns are: " + ", ".join(columns) + ". "
+            "Allowed operations only: profile, missing_values, summary, average, top_n. "
+            "average and top_n require a column exactly from the available list. Use at most three actions. "
+            "Return JSON only: {\"actions\":[{\"operation\":\"profile\"},{\"operation\":\"average\",\"column\":\"score\"}]}. "
+            f"User task: {task}"
+        )
+        try:
+            response = self.chat_client(
+                model=self.model,
+                messages=[{"role": "system", "content": "Return JSON only. Never produce code or commands."}, {"role": "user", "content": prompt}],
+                options={"temperature": 0},
+            )
+            for match in re.finditer(r"\{[\s\S]*?\}\s*\}", response.message.content):
+                try:
+                    actions = _validate_dataset_actions(json.loads(match.group()), columns)
+                except json.JSONDecodeError:
+                    continue
+                if actions:
+                    return DatasetPlan(actions, "local Qwen model", "Creating a safe plan from the observed dataset schema.")
+        except Exception:
+            pass
+        return DatasetPlan(
+            _fallback_dataset_actions(task, columns),
+            "safe local fallback",
+            "Creating a safe plan from the observed dataset schema.",
+        )

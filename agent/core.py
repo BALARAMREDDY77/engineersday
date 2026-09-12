@@ -19,6 +19,7 @@ class AgentEvent:
 class AgentRun:
     events: list[AgentEvent] = field(default_factory=list)
     result: ToolResult | None = None
+    results: list[ToolResult] = field(default_factory=list)
 
 
 class DemoAgent:
@@ -79,4 +80,28 @@ class DemoAgent:
             run.events.append(AgentEvent("completed", "Task completed after recovery.", "data_analyzer"))
         else:
             run.events.append(AgentEvent("error", "Retry did not complete.", "data_analyzer"))
+        return run
+
+    def run_uploaded_data_plan(self, frame: Any, actions: list[dict[str, Any]], plan_message: str) -> AgentRun:
+        """Execute validated, in-memory CSV actions and retry invalid numeric data."""
+        run = AgentRun([AgentEvent("planning", plan_message)])
+        for action in actions:
+            operation = action["operation"]
+            arguments = {key: value for key, value in action.items() if key != "operation"}
+            run.events.append(AgentEvent("tool_selected", f"Selecting Data Analyzer: {operation.replace('_', ' ')}.", "data_analyzer"))
+            run.events.append(AgentEvent("executing", f"Executing {operation.replace('_', ' ')} on the uploaded dataset.", "data_analyzer"))
+            result = self.registry.execute_uploaded_data(frame, operation, **arguments)
+            if not result.success and result.error_code == "INVALID_NUMERIC_DATA":
+                column = arguments.get("column", "the selected column")
+                run.events.append(AgentEvent("error", result.message, "data_analyzer"))
+                run.events.append(AgentEvent("replanning", f"Handling invalid values in '{column}' safely."))
+                run.events.append(AgentEvent("retrying", f"Retrying {operation.replace('_', ' ')} using valid numeric values.", "data_analyzer"))
+                result = self.registry.execute_uploaded_data(frame, operation, **arguments, allow_cleaning=True)
+            run.results.append(result)
+            run.result = result
+            if not result.success:
+                run.events.append(AgentEvent("error", "The task could not complete safely.", "data_analyzer"))
+                return run
+            run.events.append(AgentEvent("observing", result.message, "data_analyzer"))
+        run.events.append(AgentEvent("completed", "Task completed using the uploaded dataset.", "data_analyzer"))
         return run

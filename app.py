@@ -5,10 +5,11 @@ from __future__ import annotations
 import time
 from typing import Any
 
+import pandas as pd
 import streamlit as st
 
 from agent.core import AgentEvent, DemoAgent
-from agent.planner import LocalPlanner
+from agent.planner import DatasetPlanner, LocalPlanner
 from agent.tools import ToolResult
 
 
@@ -68,6 +69,7 @@ def event_html(event: AgentEvent) -> str:
         "planning": "✓ Planning",
         "tool_selected": "✓ Tool selected",
         "executing": "● Executing",
+        "observing": "✓ Observed",
         "error": "⚠ Error detected",
         "replanning": "↻ Replanning",
         "retrying": "↻ Retrying",
@@ -114,6 +116,28 @@ def result_html(result: ToolResult, workflow: str, goal: str) -> str:
     return f'<div class="result"><b>FINAL RESULT</b><br>{body}</div>'
 
 
+def render_uploaded_results(results: list[ToolResult]) -> None:
+    st.markdown('<div class="result"><b>FINAL RESULT — UPLOADED DATASET</b><br>The agent completed these verified operations.</div>', unsafe_allow_html=True)
+    for result in results:
+        data = result.data or {}
+        operation = data.get("operation")
+        if operation == "profile":
+            st.write(f"**Dataset profile:** {data['rows']} rows • columns: {', '.join(data['columns'])}")
+            if data["missing_values"]:
+                st.warning(f"Missing values found: {data['missing_values']}")
+        elif operation == "missing_values":
+            st.write(f"**Missing-value scan:** {data['missing_values'] or 'No missing values found.'}")
+        elif operation == "average":
+            st.metric(f"Average {data['column']}", data["average"])
+            if data["invalid_values_handled"]:
+                st.caption(f"Recovered by excluding {data['invalid_values_handled']} invalid/missing value(s).")
+        elif operation == "top_n":
+            st.write(f"**Top values by {data['column']}:**")
+            st.dataframe(pd.DataFrame(data["top_records"]), use_container_width=True, hide_index=True)
+        elif operation == "summary":
+            st.dataframe(pd.DataFrame(data["summary"]), use_container_width=True)
+
+
 st.markdown("""<div class="hero"><div class="eyebrow">LOCAL-ONLY AGENTIC AI PROTOTYPE</div><h1>THE AGENT</h1><p>Watch AI do a job, not just chat.</p></div>""", unsafe_allow_html=True)
 
 left, right = st.columns([2, 1])
@@ -122,6 +146,7 @@ with left:
     selected_demo = st.selectbox("Reliable demo scenario", ["Custom task", *DEMO_TASKS], label_visibility="collapsed")
     initial_task = DEMO_TASKS.get(selected_demo, "")
     task = st.text_area("Task", value=initial_task, height=95, placeholder="Describe a local analysis task...")
+    uploaded_csv = st.file_uploader("Optional: upload a CSV for a live custom analysis", type=["csv"])
     run_clicked = st.button("Run THE AGENT", type="primary", use_container_width=True)
 with right:
     st.subheader("Safety boundary")
@@ -141,23 +166,39 @@ with timeline_col:
     timeline_box = st.empty()
 
 if run_clicked:
-    plan = LocalPlanner().create_plan(task)
-    if plan.workflow == "unsupported":
-        status_box.error("No safe workflow matched this task.")
-        action_box.write("Try one of the three provided demo scenarios.")
+    if uploaded_csv is not None:
+        try:
+            uploaded_frame = pd.read_csv(uploaded_csv)
+        except (UnicodeDecodeError, pd.errors.ParserError):
+            status_box.error("This file could not be read as a CSV.")
+            st.stop()
+        dataset_plan = DatasetPlanner().create_plan(task, list(uploaded_frame.columns))
+        uploaded_run = DemoAgent().run_uploaded_data_plan(uploaded_frame, dataset_plan.actions, dataset_plan.message)
+        events, result, result_type = uploaded_run.events, uploaded_run.result, "uploaded"
+        planner_source = dataset_plan.source
     else:
+        plan = LocalPlanner().create_plan(task)
+        if plan.workflow == "unsupported":
+            status_box.error("No safe workflow matched this task. Upload a CSV for a live analysis, or try a prepared demo.")
+            action_box.write("Use an approved demo or a CSV with a clear analysis question.")
+            st.stop()
         events, result, result_type = execute_workflow(plan.workflow, plan.goal)
         events[0] = AgentEvent("planning", plan.message)
-        planner_box.caption(f"Planner: {plan.source}")
-        rendered_events: list[str] = []
-        for event in events:
-            rendered_events.append(event_html(event))
-            timeline_box.markdown("".join(rendered_events), unsafe_allow_html=True)
-            status_box.markdown(f"**{event.status.replace('_', ' ').title()}**")
-            action_box.write(event.message)
-            tool_box.caption(f"Tool: {event.tool or 'Planning / recovery'}")
-            time.sleep(0.35)
-        st.divider()
+        planner_source = plan.source
+
+    planner_box.caption(f"Planner: {planner_source}")
+    rendered_events: list[str] = []
+    for event in events:
+        rendered_events.append(event_html(event))
+        timeline_box.markdown("".join(rendered_events), unsafe_allow_html=True)
+        status_box.markdown(f"**{event.status.replace('_', ' ').title()}**")
+        action_box.write(event.message)
+        tool_box.caption(f"Tool: {event.tool or 'Planning / recovery'}")
+        time.sleep(0.35)
+    st.divider()
+    if result_type == "uploaded":
+        render_uploaded_results(uploaded_run.results)
+    else:
         st.markdown(result_html(result, result_type, plan.goal), unsafe_allow_html=True)
 else:
     status_box.markdown("**Ready**")

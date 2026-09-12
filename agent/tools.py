@@ -52,6 +52,18 @@ class SafeToolRegistry:
         except Exception:
             return ToolResult(False, "The tool could not complete safely.", error_code="TOOL_FAILURE")
 
+    def execute_uploaded_data(self, frame: pd.DataFrame, operation: str, **arguments: Any) -> ToolResult:
+        """Run a fixed analysis operation on an in-memory user-uploaded CSV.
+
+        The upload never becomes a user-supplied path or executable instruction.
+        """
+        try:
+            return analyze_uploaded_dataframe(frame, operation, **arguments)
+        except (TypeError, ValueError) as error:
+            return ToolResult(False, str(error), error_code="INVALID_ARGUMENTS")
+        except Exception:
+            return ToolResult(False, "The uploaded-data analysis could not complete safely.", error_code="TOOL_FAILURE")
+
 
 def analyze_dataset(
     dataset: str,
@@ -125,6 +137,70 @@ def calculate(operation: str, values: list[float]) -> ToolResult:
         return ToolResult(False, "Operation is not allowed.", error_code="OPERATION_NOT_ALLOWED")
     result = round(operations[operation](), 2)
     return ToolResult(True, "Calculation completed.", {"operation": operation, "result": result})
+
+
+def analyze_uploaded_dataframe(
+    frame: pd.DataFrame,
+    operation: str,
+    column: str | None = None,
+    top_n: int = 3,
+    allow_cleaning: bool = False,
+) -> ToolResult:
+    """Perform allowlisted analytics on an already-loaded CSV dataframe."""
+    allowed_operations = {"profile", "missing_values", "average", "top_n", "summary"}
+    if operation not in allowed_operations:
+        return ToolResult(False, "Analysis operation is not allowed.", error_code="OPERATION_NOT_ALLOWED")
+    if frame.empty:
+        return ToolResult(False, "The uploaded CSV has no data rows.", error_code="EMPTY_DATASET")
+
+    if operation == "profile":
+        return ToolResult(True, "Dataset profile completed.", {
+            "operation": operation,
+            "rows": int(len(frame)),
+            "columns": list(frame.columns),
+            "missing_values": {name: int(count) for name, count in frame.isna().sum().items() if count},
+        })
+    if operation == "missing_values":
+        missing = {name: int(count) for name, count in frame.isna().sum().items() if count}
+        return ToolResult(True, "Missing-value scan completed.", {"operation": operation, "missing_values": missing})
+    if operation == "summary":
+        numeric = frame.select_dtypes(include="number")
+        if numeric.empty:
+            return ToolResult(False, "No numeric columns are available for a summary.", error_code="NO_NUMERIC_COLUMNS")
+        return ToolResult(True, "Numeric summary completed.", {
+            "operation": operation,
+            "summary": numeric.describe().round(2).to_dict(),
+        })
+
+    if column not in frame.columns:
+        return ToolResult(False, "Requested column is not available in this dataset.", error_code="COLUMN_NOT_FOUND")
+    numeric_values = pd.to_numeric(frame[column], errors="coerce")
+    invalid_count = int(numeric_values.isna().sum())
+    if invalid_count and not allow_cleaning:
+        return ToolResult(
+            False,
+            f"Found {invalid_count} missing or invalid value(s) in '{column}'.",
+            error_code="INVALID_NUMERIC_DATA",
+        )
+    cleaned = frame.assign(_value=numeric_values).dropna(subset=["_value"])
+    if cleaned.empty:
+        return ToolResult(False, "No valid numeric values remain after cleaning.", error_code="NO_VALID_VALUES")
+    if operation == "average":
+        return ToolResult(True, "Average calculation completed.", {
+            "operation": operation, "column": column,
+            "average": round(float(cleaned["_value"].mean()), 2), "invalid_values_handled": invalid_count,
+        })
+    if not isinstance(top_n, int) or not 1 <= top_n <= 10:
+        return ToolResult(False, "top_n must be between 1 and 10.", error_code="INVALID_TOP_N")
+    label_column = next((name for name in frame.columns if name != column and frame[name].dtype == object), None)
+    ranked = cleaned.sort_values("_value", ascending=False).head(top_n)
+    records = [
+        {"label": str(row[label_column]) if label_column else f"Row {index + 1}", "value": round(float(row["_value"]), 2)}
+        for index, row in ranked.iterrows()
+    ]
+    return ToolResult(True, "Top-value analysis completed.", {
+        "operation": operation, "column": column, "top_records": records, "invalid_values_handled": invalid_count,
+    })
 
 
 def search_knowledge_base(query: str) -> ToolResult:
