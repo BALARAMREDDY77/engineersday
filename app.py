@@ -8,6 +8,7 @@ from typing import Any
 import streamlit as st
 
 from agent.core import AgentEvent, DemoAgent
+from agent.planner import LocalPlanner
 from agent.tools import ToolResult
 
 
@@ -42,18 +43,6 @@ DEMO_TASKS = {
     "Environmental Research": "Compare electric vehicles and petrol vehicles using the local knowledge base.",
     "Error Recovery": "Calculate the average performance from a dataset containing an intentional invalid/missing value.",
 }
-
-
-def choose_workflow(task: str) -> str | None:
-    """Deterministic, safe routing to approved local workflows only."""
-    normalized = task.lower()
-    if any(word in normalized for word in ("invalid", "missing", "average performance", "error recovery")):
-        return "recovery"
-    if any(word in normalized for word in ("student", "performance", "attention")):
-        return "students"
-    if any(word in normalized for word in ("electric", "petrol", "vehicle", "environment")):
-        return "environment"
-    return None
 
 
 def execute_workflow(workflow: str) -> tuple[list[AgentEvent], ToolResult | None, str]:
@@ -139,18 +128,21 @@ with status_col:
     st.subheader("Agent status")
     status_box = st.empty()
     action_box = st.empty()
+    planner_box = st.empty()
     tool_box = st.empty()
 with timeline_col:
     st.subheader("Execution timeline")
     timeline_box = st.empty()
 
 if run_clicked:
-    workflow = choose_workflow(task)
-    if workflow is None:
+    plan = LocalPlanner().create_plan(task)
+    if plan.workflow == "unsupported":
         status_box.error("No safe workflow matched this task.")
         action_box.write("Try one of the three provided demo scenarios.")
     else:
-        events, result, result_type = execute_workflow(workflow)
+        events, result, result_type = execute_workflow(plan.workflow)
+        events[0] = AgentEvent("planning", plan.message)
+        planner_box.caption(f"Planner: {plan.source}")
         rendered_events: list[str] = []
         for event in events:
             rendered_events.append(event_html(event))
@@ -164,5 +156,6 @@ if run_clicked:
 else:
     status_box.markdown("**Ready**")
     action_box.write("Choose a demo and run the agent.")
+    planner_box.caption("Planner: local Qwen when available; safe local fallback otherwise")
     tool_box.caption("Tool: waiting")
     timeline_box.caption("The verified execution events will appear here.")

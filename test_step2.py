@@ -1,6 +1,7 @@
 import unittest
 
 from agent.core import DemoAgent
+from agent.planner import LocalPlanner, parse_workflow
 from agent.tools import SafeToolRegistry
 
 
@@ -29,6 +30,20 @@ class SafeToolsTest(unittest.TestCase):
             [event.status for event in run.events],
             ["planning", "tool_selected", "executing", "error", "replanning", "retrying", "executing", "completed"],
         )
+
+    def test_planner_accepts_only_allowed_json_workflow(self):
+        self.assertEqual(parse_workflow('{"workflow":"recovery"}'), "recovery")
+        self.assertIsNone(parse_workflow('{"workflow":"shell"}'))
+
+    def test_planner_keeps_model_choice_inside_approved_boundary(self):
+        class FakeResponse:
+            class message:
+                content = '{"workflow":"environment"}'
+
+        plan = LocalPlanner(chat_client=lambda **_: FakeResponse()).create_plan("Compare vehicles")
+        self.assertEqual(plan.workflow, "environment")
+        self.assertEqual(plan.tool, "knowledge_base")
+        self.assertEqual(plan.source, "local Qwen model")
 
 
 if __name__ == "__main__":
