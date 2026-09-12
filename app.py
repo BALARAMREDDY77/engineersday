@@ -134,6 +134,15 @@ def render_uploaded_results(results: list[ToolResult]) -> None:
         elif operation == "top_n":
             st.write(f"**Top values by {data['column']}:**")
             st.dataframe(pd.DataFrame(data["top_records"]), use_container_width=True, hide_index=True)
+        elif operation == "group_count_below":
+            st.write(
+                f"**Count by {data['category_column']} where {data['numeric_column']} is below {data['threshold']}:**"
+            )
+            st.dataframe(
+                pd.DataFrame(data["counts"].items(), columns=[data["category_column"], "count"]),
+                use_container_width=True,
+                hide_index=True,
+            )
         elif operation == "summary":
             st.dataframe(pd.DataFrame(data["summary"]), use_container_width=True)
 

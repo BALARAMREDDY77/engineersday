@@ -143,11 +143,14 @@ def analyze_uploaded_dataframe(
     frame: pd.DataFrame,
     operation: str,
     column: str | None = None,
+    category_column: str | None = None,
+    numeric_column: str | None = None,
+    threshold: float | None = None,
     top_n: int = 3,
     allow_cleaning: bool = False,
 ) -> ToolResult:
     """Perform allowlisted analytics on an already-loaded CSV dataframe."""
-    allowed_operations = {"profile", "missing_values", "average", "top_n", "summary"}
+    allowed_operations = {"profile", "missing_values", "average", "top_n", "summary", "group_count_below"}
     if operation not in allowed_operations:
         return ToolResult(False, "Analysis operation is not allowed.", error_code="OPERATION_NOT_ALLOWED")
     if frame.empty:
@@ -170,6 +173,24 @@ def analyze_uploaded_dataframe(
         return ToolResult(True, "Numeric summary completed.", {
             "operation": operation,
             "summary": numeric.describe().round(2).to_dict(),
+        })
+
+    if operation == "group_count_below":
+        if category_column not in frame.columns or numeric_column not in frame.columns:
+            return ToolResult(False, "Requested columns are not available in this dataset.", error_code="COLUMN_NOT_FOUND")
+        if not isinstance(threshold, (int, float)) or not -1_000_000 <= threshold <= 1_000_000:
+            return ToolResult(False, "Threshold must be a safe numeric value.", error_code="INVALID_THRESHOLD")
+        numeric_values = pd.to_numeric(frame[numeric_column], errors="coerce")
+        invalid_count = int(numeric_values.isna().sum())
+        if invalid_count and not allow_cleaning:
+            return ToolResult(False, f"Found {invalid_count} missing or invalid value(s) in '{numeric_column}'.", error_code="INVALID_NUMERIC_DATA")
+        filtered = frame.assign(_value=numeric_values).dropna(subset=["_value"])
+        filtered = filtered[filtered["_value"] < float(threshold)]
+        counts = filtered[category_column].fillna("Unknown").astype(str).value_counts().to_dict()
+        return ToolResult(True, "Grouped threshold count completed.", {
+            "operation": operation, "category_column": category_column, "numeric_column": numeric_column,
+            "threshold": float(threshold), "counts": {str(key): int(value) for key, value in counts.items()},
+            "invalid_values_handled": invalid_count,
         })
 
     if column not in frame.columns:

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 from ollama import chat
 
@@ -47,7 +47,7 @@ class TaskPlan:
 
 @dataclass(frozen=True)
 class DatasetPlan:
-    actions: list[dict[str, str]]
+    actions: list[dict[str, Any]]
     source: str
     message: str
 
@@ -120,15 +120,15 @@ class LocalPlanner:
         return TaskPlan(workflow, goal, WORKFLOW_TO_TOOL[workflow], "safe local fallback", WORKFLOW_MESSAGES[workflow])
 
 
-def _validate_dataset_actions(payload: object, columns: list[str]) -> list[dict[str, str]] | None:
+def _validate_dataset_actions(payload: object, columns: list[str]) -> list[dict[str, Any]] | None:
     if not isinstance(payload, dict) or not isinstance(payload.get("actions"), list):
         return None
-    actions: list[dict[str, str]] = []
+    actions: list[dict[str, Any]] = []
     for action in payload["actions"][:3]:
         if not isinstance(action, dict):
             return None
         operation = action.get("operation")
-        if operation not in {"profile", "missing_values", "average", "top_n", "summary"}:
+        if operation not in {"profile", "missing_values", "average", "top_n", "summary", "group_count_below"}:
             return None
         item: dict[str, str] = {"operation": operation}
         if operation in {"average", "top_n"}:
@@ -136,15 +136,30 @@ def _validate_dataset_actions(payload: object, columns: list[str]) -> list[dict[
             if column not in columns:
                 return None
             item["column"] = column
+        if operation == "group_count_below":
+            category_column, numeric_column, threshold = action.get("category_column"), action.get("numeric_column"), action.get("threshold")
+            if category_column not in columns or numeric_column not in columns or not isinstance(threshold, (int, float)):
+                return None
+            item.update({"category_column": category_column, "numeric_column": numeric_column, "threshold": float(threshold)})
         actions.append(item)
     return actions or None
 
 
-def _fallback_dataset_actions(task: str, columns: list[str]) -> list[dict[str, str]]:
+def _fallback_dataset_actions(task: str, columns: list[str]) -> list[dict[str, Any]]:
     normalized = task.lower()
     numeric_candidates = [name for name in columns if any(key in name.lower() for key in ("score", "mark", "amount", "sales", "value", "price"))]
     numeric_column = numeric_candidates[0] if numeric_candidates else None
-    actions: list[dict[str, str]] = [{"operation": "profile"}]
+    actions: list[dict[str, Any]] = [{"operation": "profile"}]
+    threshold_match = re.search(r"(?:less than|below|under|lower than)\s*(\d+(?:\.\d+)?)", normalized)
+    category_column = next((name for name in columns if any(key in name.lower() for key in ("gender", "sex"))), None)
+    requested_numeric = next(
+        (name for name in columns if all(word in normalized for word in name.lower().replace(".", " ").split())), None
+    )
+    if threshold_match and category_column and requested_numeric:
+        return actions + [{
+            "operation": "group_count_below", "category_column": category_column,
+            "numeric_column": requested_numeric, "threshold": float(threshold_match.group(1)),
+        }]
     if any(word in normalized for word in ("missing", "invalid", "empty", "quality")):
         actions.append({"operation": "missing_values"})
     if numeric_column and any(word in normalized for word in ("top", "highest", "best", "rank")):
@@ -164,9 +179,13 @@ class DatasetPlanner:
         self.chat_client = chat_client
 
     def create_plan(self, task: str, columns: list[str]) -> DatasetPlan:
+        fast_actions = _fallback_dataset_actions(task, columns)
+        if any(action["operation"] == "group_count_below" for action in fast_actions):
+            return DatasetPlan(fast_actions, "validated local rule", "Planning a grouped threshold analysis from the observed dataset schema.")
         prompt = (
             "Create a safe plan for a local CSV. Available columns are: " + ", ".join(columns) + ". "
-            "Allowed operations only: profile, missing_values, summary, average, top_n. "
+            "Allowed operations only: profile, missing_values, summary, average, top_n, group_count_below. "
+            "group_count_below requires category_column, numeric_column, and numeric threshold. "
             "average and top_n require a column exactly from the available list. Use at most three actions. "
             "Return JSON only: {\"actions\":[{\"operation\":\"profile\"},{\"operation\":\"average\",\"column\":\"score\"}]}. "
             f"User task: {task}"
