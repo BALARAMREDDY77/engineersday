@@ -45,6 +45,20 @@ class SafeToolsTest(unittest.TestCase):
         self.assertEqual(plan.tool, "knowledge_base")
         self.assertEqual(plan.source, "local Qwen model")
 
+    def test_student_attention_demo_data(self):
+        run = DemoAgent().execute_plan([
+            {"tool": "data_analyzer", "arguments": {"dataset": "students.csv", "score_column": "score"}}
+        ])
+        self.assertTrue(run.result.success)
+        self.assertEqual(run.result.data["students_needing_attention"], ["Ishaan", "Rohan"])
+
+    def test_environment_knowledge_base_demo_data(self):
+        result = SafeToolRegistry().execute(
+            "knowledge_base", query="electric vehicles petrol vehicles comparison"
+        )
+        self.assertTrue(result.success)
+        self.assertGreaterEqual(len(result.data["matches"]), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
