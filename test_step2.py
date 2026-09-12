@@ -20,6 +20,16 @@ class SafeToolsTest(unittest.TestCase):
         self.assertTrue(run.result.success)
         self.assertEqual([event.status for event in run.events], ["planning", "tool_selected", "executing", "completed"])
 
+    def test_invalid_data_triggers_real_recovery_and_retry(self):
+        run = DemoAgent().run_average_performance_demo()
+        self.assertTrue(run.result.success)
+        self.assertEqual(run.result.data["average_score"], 83.33)
+        self.assertEqual(run.result.data["invalid_values_handled"], 2)
+        self.assertEqual(
+            [event.status for event in run.events],
+            ["planning", "tool_selected", "executing", "error", "replanning", "retrying", "executing", "completed"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

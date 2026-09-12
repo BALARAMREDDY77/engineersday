@@ -42,3 +42,41 @@ class DemoAgent:
             run.events.append(AgentEvent("error", "Tool returned an error.", tool_name))
             return run
         return run
+
+    def run_average_performance_demo(self) -> AgentRun:
+        """Run the intentional failure scenario with an actual recovery and retry.
+
+        The first call deliberately uses strict validation.  The returned
+        INVALID_SCORE_DATA error is examined before the recovery call is made.
+        """
+        run = AgentRun([AgentEvent("planning", "Planning average-performance analysis.")])
+        initial_arguments = {
+            "dataset": "performance_with_invalid.csv",
+            "score_column": "score",
+            "allow_cleaning": False,
+        }
+        run.events.append(AgentEvent("tool_selected", "Selecting Data Analyzer.", "data_analyzer"))
+        run.events.append(AgentEvent("executing", "Analyzing the dataset.", "data_analyzer"))
+        first_result = self.registry.execute("data_analyzer", **initial_arguments)
+
+        if first_result.success:
+            run.result = first_result
+            run.events.append(AgentEvent("completed", "Task completed.", "data_analyzer"))
+            return run
+
+        run.events.append(AgentEvent("error", "Tool returned an error: invalid data detected.", "data_analyzer"))
+        if first_result.error_code != "INVALID_SCORE_DATA":
+            run.result = first_result
+            return run
+
+        run.events.append(AgentEvent("replanning", "Handling invalid data by excluding invalid scores."))
+        run.events.append(AgentEvent("retrying", "Retrying analysis with safe data cleaning.", "data_analyzer"))
+        retry_arguments = {**initial_arguments, "allow_cleaning": True}
+        run.events.append(AgentEvent("executing", "Re-analyzing valid scores.", "data_analyzer"))
+        retry_result = self.registry.execute("data_analyzer", **retry_arguments)
+        run.result = retry_result
+        if retry_result.success:
+            run.events.append(AgentEvent("completed", "Task completed after recovery.", "data_analyzer"))
+        else:
+            run.events.append(AgentEvent("error", "Retry did not complete.", "data_analyzer"))
+        return run

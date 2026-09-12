@@ -1,0 +1,14 @@
+[
+  {
+    "topic": "electric vehicles",
+    "summary": "Electric vehicles have no tailpipe emissions and typically lower energy and maintenance costs. Their charging time and range depend on the battery and charging access."
+  },
+  {
+    "topic": "petrol vehicles",
+    "summary": "Petrol vehicles can refuel quickly through established fuel stations but create tailpipe emissions and depend on fossil fuel."
+  },
+  {
+    "topic": "comparison",
+    "summary": "Electric vehicles suit routes with practical charging access; petrol vehicles offer faster refuelling where charging is limited."
+  }
+]
