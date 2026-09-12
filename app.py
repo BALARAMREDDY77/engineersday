@@ -194,7 +194,7 @@ if run_clicked:
         status_box.markdown(f"**{event.status.replace('_', ' ').title()}**")
         action_box.write(event.message)
         tool_box.caption(f"Tool: {event.tool or 'Planning / recovery'}")
-        time.sleep(0.35)
+        time.sleep(0.15)
     st.divider()
     if result_type == "uploaded":
         render_uploaded_results(uploaded_run.results)

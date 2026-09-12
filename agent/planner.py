@@ -106,7 +106,8 @@ class LocalPlanner:
                     {"role": "system", "content": "You are a constrained local task classifier. Return JSON only."},
                     {"role": "user", "content": prompt},
                 ],
-                options={"temperature": 0},
+                options={"temperature": 0, "num_predict": 60},
+                think=False,
             )
             parsed = parse_plan(response.message.content)
             if parsed is not None:
@@ -174,7 +175,8 @@ class DatasetPlanner:
             response = self.chat_client(
                 model=self.model,
                 messages=[{"role": "system", "content": "Return JSON only. Never produce code or commands."}, {"role": "user", "content": prompt}],
-                options={"temperature": 0},
+                options={"temperature": 0, "num_predict": 80},
+                think=False,
             )
             for match in re.finditer(r"\{[\s\S]*?\}\s*\}", response.message.content):
                 try:
