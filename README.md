@@ -33,6 +33,17 @@ Open the local Streamlit URL, normally `http://localhost:8501`.
 2. **Environmental Research** — Qwen selects the local Knowledge Base and returns an EV-versus-petrol comparison.
 3. **Error Recovery** — strict analysis detects invalid/missing scores, replans, safely excludes them, retries, and completes with average performance **83.33**.
 
+### Custom task examples
+
+Choose **Custom task** and try one of these:
+
+- `Who are the top students in the local performance data?`
+- `Which students have low attendance?`
+- `Give me a summary of the student score distribution.`
+- `Which students may need support based on their scores?`
+
+Each request is classified locally by Qwen into an allowlisted analysis goal; the result card changes to match that goal.
+
 Use the timeline on the Error Recovery demo to show the actual sequence:
 
 ```text

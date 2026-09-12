@@ -1,7 +1,7 @@
 import unittest
 
 from agent.core import DemoAgent
-from agent.planner import LocalPlanner, parse_workflow
+from agent.planner import LocalPlanner, parse_plan
 from agent.tools import SafeToolRegistry
 
 
@@ -31,17 +31,18 @@ class SafeToolsTest(unittest.TestCase):
             ["planning", "tool_selected", "executing", "error", "replanning", "retrying", "executing", "completed"],
         )
 
-    def test_planner_accepts_only_allowed_json_workflow(self):
-        self.assertEqual(parse_workflow('{"workflow":"recovery"}'), "recovery")
-        self.assertIsNone(parse_workflow('{"workflow":"shell"}'))
+    def test_planner_accepts_only_allowed_json_plan(self):
+        self.assertEqual(parse_plan('{"workflow":"recovery", "goal":"average"}'), ("recovery", "average"))
+        self.assertIsNone(parse_plan('{"workflow":"shell", "goal":"anything"}'))
 
     def test_planner_keeps_model_choice_inside_approved_boundary(self):
         class FakeResponse:
             class message:
-                content = '{"workflow":"environment"}'
+                content = '{"workflow":"environment", "goal":"comparison"}'
 
         plan = LocalPlanner(chat_client=lambda **_: FakeResponse()).create_plan("Compare vehicles")
         self.assertEqual(plan.workflow, "environment")
+        self.assertEqual(plan.goal, "comparison")
         self.assertEqual(plan.tool, "knowledge_base")
         self.assertEqual(plan.source, "local Qwen model")
 
@@ -51,6 +52,13 @@ class SafeToolsTest(unittest.TestCase):
         ])
         self.assertTrue(run.result.success)
         self.assertEqual(run.result.data["students_needing_attention"], ["Ishaan", "Rohan"])
+
+    def test_student_top_performer_analysis(self):
+        result = SafeToolRegistry().execute(
+            "data_analyzer", dataset="students.csv", analysis_mode="top_performers"
+        )
+        self.assertTrue(result.success)
+        self.assertEqual(result.data["top_performers"][0], {"student": "Aarav", "score": 92.0})
 
     def test_environment_knowledge_base_demo_data(self):
         result = SafeToolRegistry().execute(

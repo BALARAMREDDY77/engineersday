@@ -53,10 +53,18 @@ class SafeToolRegistry:
             return ToolResult(False, "The tool could not complete safely.", error_code="TOOL_FAILURE")
 
 
-def analyze_dataset(dataset: str, score_column: str = "score", allow_cleaning: bool = False) -> ToolResult:
+def analyze_dataset(
+    dataset: str,
+    score_column: str = "score",
+    allow_cleaning: bool = False,
+    analysis_mode: str = "attention",
+) -> ToolResult:
     """Return basic score statistics from one of the demo datasets only."""
     if dataset not in ALLOWED_DATASETS:
         return ToolResult(False, "Dataset is not in the approved demo set.", error_code="DATASET_NOT_ALLOWED")
+    allowed_modes = {"attention", "top_performers", "attendance", "summary"}
+    if analysis_mode not in allowed_modes:
+        return ToolResult(False, "Analysis mode is not allowed.", error_code="ANALYSIS_MODE_NOT_ALLOWED")
 
     file_path = DATA_DIR / dataset
     if not file_path.is_file():
@@ -85,10 +93,19 @@ def analyze_dataset(dataset: str, score_column: str = "score", allow_cleaning: b
         "average_score": round(float(valid_scores.mean()), 2),
         "highest_score": round(float(valid_scores.max()), 2),
         "lowest_score": round(float(valid_scores.min()), 2),
+        "analysis_mode": analysis_mode,
     }
     if "student" in frame.columns:
-        attention_rows = frame.loc[(numeric_scores < 50).fillna(False), "student"].tolist()
-        findings["students_needing_attention"] = attention_rows
+        findings["students_needing_attention"] = frame.loc[(numeric_scores < 50).fillna(False), "student"].tolist()
+        ranked = frame.assign(_score=numeric_scores).dropna(subset=["_score"]).sort_values("_score", ascending=False)
+        findings["top_performers"] = [
+            {"student": row["student"], "score": round(float(row["_score"]), 2)}
+            for _, row in ranked.head(3).iterrows()
+        ]
+    if "attendance_percent" in frame.columns:
+        findings["students_with_low_attendance"] = frame.loc[
+            (pd.to_numeric(frame["attendance_percent"], errors="coerce") < 75).fillna(False), "student"
+        ].tolist()
 
     return ToolResult(True, "Dataset analysis completed.", findings)
 

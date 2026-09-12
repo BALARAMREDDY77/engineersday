@@ -45,14 +45,16 @@ DEMO_TASKS = {
 }
 
 
-def execute_workflow(workflow: str) -> tuple[list[AgentEvent], ToolResult | None, str]:
+def execute_workflow(workflow: str, goal: str) -> tuple[list[AgentEvent], ToolResult | None, str]:
     agent = DemoAgent()
     if workflow == "recovery":
         run = agent.run_average_performance_demo()
         return run.events, run.result, "error_recovery"
     if workflow == "students":
         run = agent.execute_plan([
-            {"tool": "data_analyzer", "arguments": {"dataset": "students.csv", "score_column": "score"}}
+            {"tool": "data_analyzer", "arguments": {
+                "dataset": "students.csv", "score_column": "score", "analysis_mode": goal
+            }}
         ])
         return run.events, run.result, "students"
     run = agent.execute_plan([
@@ -82,19 +84,23 @@ def event_html(event: AgentEvent) -> str:
     return f'<div class="event {style}"><b>{symbols[event.status]}</b><br>{event.message}{tool_label}</div>'
 
 
-def result_html(result: ToolResult, workflow: str) -> str:
+def result_html(result: ToolResult, workflow: str, goal: str) -> str:
     if not result.success:
         return f'<div class="warning"><b>Task needs attention</b><br>{result.message}</div>'
 
     data: dict[str, Any] = result.data or {}
     if workflow == "students":
-        students = data.get("students_needing_attention", [])
-        names = ", ".join(students) if students else "No students"
-        body = (
-            f"Analyzed <b>{data['records_analyzed']}</b> student records. "
-            f"Average score: <b>{data['average_score']}</b>. "
-            f"Students who may need attention: <b>{names}</b>."
-        )
+        if goal == "top_performers":
+            top = ", ".join(f"{item['student']} ({item['score']})" for item in data["top_performers"])
+            body = f"Top performers from <b>{data['records_analyzed']}</b> records: <b>{top}</b>."
+        elif goal == "attendance":
+            names = ", ".join(data.get("students_with_low_attendance", [])) or "No students"
+            body = f"Students below 75% attendance: <b>{names}</b>."
+        elif goal == "summary":
+            body = f"Score summary: average <b>{data['average_score']}</b>, highest <b>{data['highest_score']}</b>, lowest <b>{data['lowest_score']}</b>."
+        else:
+            names = ", ".join(data.get("students_needing_attention", [])) or "No students"
+            body = f"Analyzed <b>{data['records_analyzed']}</b> records. Students who may need attention: <b>{names}</b>."
     elif workflow == "error_recovery":
         body = (
             f"Average performance: <b>{data['average_score']}</b>. "
@@ -140,7 +146,7 @@ if run_clicked:
         status_box.error("No safe workflow matched this task.")
         action_box.write("Try one of the three provided demo scenarios.")
     else:
-        events, result, result_type = execute_workflow(plan.workflow)
+        events, result, result_type = execute_workflow(plan.workflow, plan.goal)
         events[0] = AgentEvent("planning", plan.message)
         planner_box.caption(f"Planner: {plan.source}")
         rendered_events: list[str] = []
@@ -152,7 +158,7 @@ if run_clicked:
             tool_box.caption(f"Tool: {event.tool or 'Planning / recovery'}")
             time.sleep(0.35)
         st.divider()
-        st.markdown(result_html(result, result_type), unsafe_allow_html=True)
+        st.markdown(result_html(result, result_type, plan.goal), unsafe_allow_html=True)
 else:
     status_box.markdown("**Ready**")
     action_box.write("Choose a demo and run the agent.")
